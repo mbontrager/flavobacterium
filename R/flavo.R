@@ -38,19 +38,23 @@ getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
 
 ## Prune taxa not present in any sample (if they exist)
 ## And remove unnecessary objects from memory
-GP <- prune_taxa(taxa_sums(physeq) > 0, physeq)
+physeq_pruned <- prune_taxa(taxa_sums(physeq) > 0, physeq)
 rm(otuTable, otumat, taxmat, physeq, TAX, OTU)
+physeq_rabund <- transform_sample_counts(physeq_pruned, function(x) x / sum(x))
 
 ## Flavobacterium abundance plots
-GP_sub1 <- subset_taxa(GP, Genus == "Flavobacterium")
+flavobact <- subset_taxa(physeq_rabund, Genus == "Flavobacterium")
+
 theme_set(theme_bw() +
                   theme(axis.line = element_line(colour = "black"),
                         panel.grid.major = element_blank(),
                         panel.grid.minor = element_blank(),
                         panel.border = element_blank(),
                         panel.background = element_blank()))
-plot_bar(GP_sub1, fill = "Species", title = "Flavobacterium") + 
+
+plot_bar(flavobact, fill = "Species", title = "Flavobacterium") + 
         scale_x_discrete(limits = ordered_samples) + 
+        scale_fill_manual(values = getPalette(9))
         theme(axis.title.x = element_text(size = 12),
               axis.title.y = element_text(size = 12),
               plot.title = element_text(size = 24, face = "bold"))
