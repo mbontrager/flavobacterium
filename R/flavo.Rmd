@@ -1,0 +1,194 @@
+# Analysis and visualization of Flavobacterium abundance
+### Martin Bontrager
+### August 1, 2016
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+The input data from these analyses were generated from a sampling of copepods and water as explained in Bontrager et. al 2016. All data processing was accomplished via scripts publicly available at github.com/mbontrager/16S_processing. 
+
+The input file for this analysis is the `sample_matrix_raw_counts.csv` file generated from the `01_pre-processing` step in the 16S processing analysis workflow. That input is a data frame of all bacterial OTUs in the sampling, the greengenes taxonomy associated with the OTU, and the raw count of sequences from each OTU in each sample. First, we want to quickly see the prevalence of flavobacterium, aeromonas, and chryseobacterium in paired water "W" and Eurytemora affinis "E" samples:
+
+```{r read_data}
+library(phyloseq)
+library(ggplot2)
+library(RColorBrewer)
+library(knitr)
+
+setwd("~/Dropbox/Projects/flavobacterium/data/")
+
+## Read in the .csv otu table and metadata
+otuTable <- read.csv("sample_matrix_raw_counts.csv", 
+                     header = TRUE, row.names = 1)
+otuTable <- subset(otuTable, select=c(2:length(colnames(otuTable))))
+metaData <- read.csv("sample_metadata.csv", header = TRUE, row.names = 1)
+#ordered_samples <- as.vector((read.table("samples.txt"))[, 1])
+
+## Create matrices for phyloseq
+otumat <- as.matrix(subset(otuTable, select=c(8:length(colnames(otuTable)))))
+otuTable[] <- lapply(otuTable, as.character)
+taxmat <- as.matrix(subset(otuTable, select=c(1:7)))
+
+## Declare phyloseq objects
+OTU <- otu_table(otumat, taxa_are_rows = TRUE)
+TAX <- tax_table(taxmat)
+metaData <- sample_data(metaData)
+
+physeq <- phyloseq(OTU, TAX, metaData)
+
+## GGplot themeing
+theme_set(theme_bw())
+pal = "Set1"
+scale_colour_discrete <- function(palname = pal, ...) {
+        scale_colour_brewer(palette = palname, ...)
+}
+scale_fill_discrete <- function(palname = pal, ...) {
+        scale_fill_brewer(palette = palname, ...)
+}
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+```
+
+```{r process_data}
+## Prune taxa not present in any sample (if they exist)
+## And remove unnecessary objects from memory
+physeq_pruned <- prune_taxa(taxa_sums(physeq) > 0, physeq)
+rm(otuTable, otumat, taxmat, physeq, TAX, OTU)
+physeq_rabund <- transform_sample_counts(physeq_pruned, function(x) x / sum(x))
+
+## Flavobacterium abundance plots
+flavobact <- subset_taxa(physeq_rabund, Genus == "Flavobacterium")
+
+theme_set(theme_bw() +
+                  theme(axis.line = element_line(colour = "black"),
+                        panel.grid.major = element_blank(),
+                        panel.grid.minor = element_blank(),
+                        panel.border = element_blank(),
+                        panel.background = element_blank()))
+
+plot_bar(flavobact, fill = "Species", title = "Flavobacterium") + 
+        scale_fill_manual(values = getPalette(9)) +
+        theme(axis.title.x = element_text(size = 12),
+              axis.title.y = element_text(size = 12),
+              plot.title = element_text(size = 24, face = "bold"))
+
+## Chryseobacterium abundance plots
+chryseo <- subset_taxa(physeq_rabund, Genus == "Chryseobacterium")
+
+plot_bar(chryseo, fill = "Species", title = "Chryseobacterium") + 
+        scale_fill_manual(values = getPalette(9)) +
+        theme(axis.title.x = element_text(size = 12),
+              axis.title.y = element_text(size = 12),
+              plot.title = element_text(size = 24, face = "bold"))
+
+## Aeromonas abundance plots
+aero <- subset_taxa(physeq_rabund, Genus == "Aeromonas")
+
+plot_bar(aero, fill = "Species", title = "Aeromonas") + 
+        theme(axis.title.x = element_text(size = 12),
+              axis.title.y = element_text(size = 12),
+              plot.title = element_text(size = 24, face = "bold"))
+```
+
+It seems clear that both of these genera are much more prevalent in copepod-associated samples than in the surrounding water, although chryseobacterium are far less common overall.
+
+We can quantify the enrichment with a Wald test, available in the DESeq2 package. This method is taken from McMurdie and Holmes (2014) and from phyloseq tutorials available at http://joey711.github.io/phyloseq-extensions/DESeq2.html
+
+The following table is a list of bacterial genera which are significantly enriched in copepod-associated samples. Note the significant enrichment of aeromonas, flavobacterium, and chryseobacterium:
+
+```{r genera_enriched}
+# Following a procedure online, convert phyloseq to DESeq object
+# Perform analyses on "Environment", i.e. which taxa separate copepods and water
+library(DESeq2)
+packageVersion("DESeq2")
+physeq_pruned <- tax_glom(physeq_pruned, "Genus")
+copdds <- phyloseq_to_deseq2(physeq_pruned, ~ Environment)
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+    exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+# calculate geometric means prior to estimate size factors
+geoMeans <- apply(counts(copdds), 1, gm_mean)
+copdds <- estimateSizeFactors(copdds, geoMeans = geoMeans)
+copdds <- DESeq(copdds, fitType="local")
+
+#Output and format results
+res <- results(copdds)
+res <- res[order(res$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab <- res[(res$padj < alpha), ]
+sigtab <- cbind(as(sigtab, "data.frame"), as(tax_table(physeq_pruned)[rownames(sigtab), ], "matrix"))
+
+sigtab <- sigtab[,1:12]
+
+# Positive log fold changes in this case mean abundant taxa in water:
+posigtab <- sigtab[sigtab[, "log2FoldChange"] > 0, ]
+# Negative log fold changes mean abundance in copepods
+negsigtab <- sigtab[sigtab[, "log2FoldChange"] < 0, ]
+print("Genera that are more abundant in copepods:")
+kable(head(negsigtab, 30))
+```
+
+## Abundance overall
+
+I'd like to visualize this relationship overall in a stacked bar chart. So what I need to know is the mean % abundance of aeromonas, flavobacterium, and chryseobacterium in copepods vs. water samples overall:
+
+```{r pathogen_plot}
+library(reshape2)
+physeq_pruned <- transform_sample_counts(physeq_pruned, 
+                                   function(x) round(100 * (x/sum(x)), 2))
+cop <- subset_samples(physeq_pruned, Environment == "Copepod")
+b <- psmelt(cop)[, 1:3]
+c <- dcast(b, OTU ~ Sample)
+d <- as.data.frame(tax_table(cop))
+d <- cbind(OTU = rownames(d), d)
+e <- merge(d, c, by = "OTU")
+x <- subset(e, Genus %in% c("Flavobacterium", "Aeromonas", "Chryseobacterium"))
+x <- x[, c(7, 9:22)]
+x <- t(x)
+colnames(x) <- x[1,]
+copepod_abundance <- as.data.frame(x[2:length(rownames(x)),], 
+                                   stringsAsFactors = FALSE)
+copepod_abundance <- as.data.frame(sapply(copepod_abundance,as.numeric))
+
+wat <- subset_samples(physeq_pruned, Environment == "Water")
+b <- psmelt(wat)[, 1:3]
+c <- dcast(b, OTU ~ Sample)
+d <- as.data.frame(tax_table(wat))
+d <- cbind(OTU = rownames(d), d)
+e <- merge(d, c, by = "OTU")
+x <- subset(e, Genus %in% c("Flavobacterium", "Aeromonas", "Chryseobacterium"))
+x <- x[, c(7, 9:22)]
+x <- t(x)
+colnames(x) <- x[1,]
+water_abundance <- as.data.frame(x[2:length(rownames(x)),],
+                                 stringsAsFactors=FALSE)
+water_abundance <- as.data.frame(sapply(water_abundance, as.numeric))
+
+Genus <- c("Aeromonas", "Flavobacterium", "Chryseobacterium")
+Copepod <- c(mean(copepod_abundance$Aeromonas),
+             mean(copepod_abundance$Flavobacterium),
+             mean(copepod_abundance$Chryseobacterium))
+Water <- c(mean(water_abundance$Aeromonas),
+           mean(water_abundance$Flavobacterium),
+           mean(water_abundance$Chryseobacterium))
+
+d <- as.data.frame(cbind(Genus, Copepod, Water))
+
+theme_set(theme_bw(base_size = 24))
+pal = "Set1"
+dat.m <- melt(d,id.vars = "Genus")
+dat.m$value <- as.numeric(dat.m$value)
+#png("pathogens.png", units="in", width=7, height=5, res=200)
+ggplot(dat.m, aes(x = variable, y = value, fill=Genus)) +
+    geom_bar(stat='identity') +
+    ylab("Mean % Abundance") +
+    theme(axis.title.x=element_blank(),
+          axis.text=element_text(),
+          axis.text.x=element_text(size=26),
+          axis.title.y=element_text(face="bold"))+
+    scale_fill_brewer(palette="Set1")
+#dev.off()
+```
