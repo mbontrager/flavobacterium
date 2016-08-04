@@ -191,4 +191,12 @@ ggplot(dat.m, aes(x = variable, y = value, fill=Genus)) +
           axis.title.y=element_text(face="bold"))+
     scale_fill_brewer(palette="Set1")
 #dev.off()
+
+d$Water <- as.numeric(as.character(d$Water))
+d$Copepod <- as.numeric(as.character(d$Copepod))
 ```
+
+
+## Copepod microbiome vs water
+
+Overall, prospective fish pathogens composed approximately `r round(sum(d$Copepod), 2)`% of Copepod microbiomes and only `r round(sum(d$Water), 2)`% of water microbiomes.
